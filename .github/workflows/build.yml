@@ -103,7 +103,7 @@ jobs:
       - uses: actions/download-artifact@v3
         with:
           name: draft-release
-          path: ~/download/release_upload_url.txt
+          path: ~/download
       - id: upload-url
         run: |
           echo "url=$(cat ~/download/release_upload_url.txt)" >> $GITHUB_OUTPUT
