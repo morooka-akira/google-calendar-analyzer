@@ -103,9 +103,10 @@ jobs:
       - uses: actions/download-artifact@v3
         with:
           name: draft-release
+          path: ~/download/release_upload_url.txt
       - id: upload-url
         run: |
-          echo "url=$(cat draft-release/release_upload_url.txt)" >> $GITHUB_OUTPUT
+          echo "url=$(cat ~/download/release_upload_url.txt)" >> $GITHUB_OUTPUT
       - uses: actions/download-artifact@v3
         with:
           name: build-${{ matrix.target }}-${{ needs.build.outputs.version }}
