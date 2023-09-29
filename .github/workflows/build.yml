@@ -2,7 +2,6 @@ name: Build
 on:
   push:
     branches: [main]
-  pull_request:
 
 jobs:
   build:
@@ -21,14 +20,14 @@ jobs:
     outputs:
       version: ${{ steps.properties.outputs.version }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           profile: minimal
           target: ${{ matrix.target }}
           override: true
-      - uses: Swatinem/rust-cache@v1
+      - uses: Swatinem/rust-cache@v2
       - name: Build release version
         run: cargo build --verbose --release --target=${{ matrix.target }}
       - name: Export properties
@@ -51,7 +50,7 @@ jobs:
     steps:
       # Check out current repository
       - name: Fetch Sources
-        uses: actions/checkout@v2.3.4
+        uses: actions/checkout@v4.1.0
 
       # Remove old release drafts by using the curl request for the available releases with draft flag
       - name: Remove Old Release Drafts
@@ -101,13 +100,13 @@ jobs:
     needs: [build, draft-release]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v3
         with:
           name: draft-release
       - id: upload-url
         run: |
           echo "::set-output name=url::$(cat draft-release/release_upload_url.txt)"
-      - uses: actions/download-artifact@v1
+      - uses: actions/download-artifact@v3
         with:
           name: build-${{ matrix.target }}-${{ needs.build.outputs.version }}
           path: build/
