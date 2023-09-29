@@ -19,6 +19,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     outputs:
       version: ${{ steps.properties.outputs.version }}
+      name: google-calendar-analyzer
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
@@ -35,12 +36,13 @@ jobs:
         shell: bash
         run: |
           VERSION="$(cargo run --bin version)"
-          echo "::set-output name=version::$VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
       - name: Upload artifact
+        id: upload
         uses: actions/upload-artifact@v3
         with:
           name: build-${{ matrix.target }}-${{steps.properties.outputs.version}}
-          path: target/${{ matrix.target }}/release/main
+          path: target/${{ matrix.target }}/release/google-calendar-analyzer
 
   draft-release:
     name: Release Draft
@@ -103,7 +105,7 @@ jobs:
       - uses: actions/download-artifact@v3
         with:
           name: draft-release
-          path: ~/download
+          path: ~/download/
       - id: upload-url
         run: |
           echo "url=$(cat ~/download/release_upload_url.txt)" >> $GITHUB_OUTPUT
@@ -112,12 +114,12 @@ jobs:
           name: build-${{ matrix.target }}-${{ needs.build.outputs.version }}
           path: build/
       - name: zip the artifact
-        run: zip -j build/main.zip build/main
+        run: zip -j build/main.zip build/${{ needs.build.outputs.name }}
       - uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.upload-url.outputs.url }}
           asset_path: ./build/main.zip
-          asset_name: main-${{ matrix.target }}-${{ needs.build.outputs.version }}.zip
+          asset_name: ${{ needs.build.outputs.name }}-${{ matrix.target }}-${{ needs.build.outputs.version }}.zip
           asset_content_type: application/zip
