@@ -1,3 +1,6 @@
+use std::str::FromStr;
+
+use chrono::{DateTime, Datelike, FixedOffset, NaiveTime};
 use reqwest::{
     header::{HeaderMap, HeaderValue, AUTHORIZATION},
     Client,
@@ -5,35 +8,47 @@ use reqwest::{
 use serde::Deserialize;
 use urlencoding::encode;
 
+use crate::config;
+
 #[derive(Deserialize, Debug)]
 struct Events {
     items: Vec<EventItem>,
 }
 
 #[derive(Deserialize, Debug)]
-pub struct EventItem {
-    pub summary: Option<String>,
-    pub start: EventTime,
-    pub end: EventTime,
+struct EventItem {
+    summary: Option<String>,
+    start: EventTime,
+    end: EventTime,
 }
 
 #[derive(Deserialize, Debug)]
-pub struct EventTime {
+struct EventTime {
     #[serde(rename = "dateTime")]
-    pub date_time: Option<String>,
+    date_time: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct CalenderEventItem {
+    pub summary: String,
+    pub start: CalenderEventTime,
+    pub end: CalenderEventTime,
+}
+
+#[derive(Debug)]
+pub struct CalenderEventTime {
+    pub date_time: DateTime<FixedOffset>,
 }
 
 pub async fn get_calenders(
     access_token: &str,
-    calendar_id: &str,
-    start: &str,
-    end: &str,
-) -> Result<Vec<EventItem>, reqwest::Error> {
-    let time_min = start;
-    let time_max = end;
+    config: &config::Config,
+) -> Result<Vec<CalenderEventItem>, reqwest::Error> {
+    let time_min = &config.start_date;
+    let time_max = &config.end_date;
     let events_url = format!(
         "https://www.googleapis.com/calendar/v3/calendars/{}/events?singleEvents=true&timeMin={}&timeMax={}",
-        calendar_id,
+        config.calendar_id,
         encode(time_min),
         encode(time_max)
     );
@@ -49,13 +64,35 @@ pub async fn get_calenders(
         .json()
         .await?;
 
-    let filtered_events: Vec<EventItem> = events
-        .items
+    let calendar_events = events.items.into_iter().filter_map(|event| {
+        if let (Some(summary), Some(start), Some(end)) =
+            (event.summary, event.start.date_time, event.end.date_time)
+        {
+            let start_time = DateTime::<FixedOffset>::from_str(&start).unwrap();
+            let end_time = DateTime::<FixedOffset>::from_str(&end).unwrap();
+            Some(CalenderEventItem {
+                summary,
+                start: CalenderEventTime {
+                    date_time: start_time,
+                },
+                end: CalenderEventTime {
+                    date_time: end_time,
+                },
+            })
+        } else {
+            None
+        }
+    });
+
+    let filtered_events: Vec<CalenderEventItem> = calendar_events
         .into_iter()
         .filter(|event| {
-            event.summary.is_some()
-                && event.start.date_time.is_some()
-                && event.end.date_time.is_some()
+            let weekday = event.start.date_time.weekday();
+            config.day_of_weeks.contains(&(weekday as u8))
+        })
+        .filter(|event| {
+            let event_start_time: NaiveTime = event.start.date_time.time();
+            event_start_time >= config.start_time && event_start_time < config.end_time
         })
         .collect();
 
