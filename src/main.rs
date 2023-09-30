@@ -16,6 +16,8 @@ async fn main() {
 
     let token = oauth::get_access_token().await.unwrap();
 
+    println!("\n");
+
     let events = calendar::get_calenders(&token.access_token, &config)
         .await
         .unwrap();
