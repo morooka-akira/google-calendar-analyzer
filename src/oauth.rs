@@ -2,14 +2,14 @@ use std::{collections::HashMap, fs, io, path::Path, time::SystemTime};
 
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use oauth2::{
-    basic::BasicClient, AuthUrl, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge, RedirectUrl,
-    Scope, TokenUrl,
+    basic::BasicClient, reqwest::async_http_client, AuthUrl, ClientId, ClientSecret, CsrfToken,
+    PkceCodeChallenge, RedirectUrl, RefreshToken, Scope, TokenResponse, TokenUrl,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct TokenResponse {
+pub struct Token {
     pub access_token: String,
     pub token_type: String,
     pub expires_in: u64,
@@ -75,10 +75,10 @@ impl TempToken {
 const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const REDIRECT_URI: &str = "urn:ietf:wg:oauth:2.0:oob";
 
-pub async fn get_access_token() -> Result<TokenResponse, reqwest::Error> {
+pub async fn get_access_token() -> Result<Token, reqwest::Error> {
     if let Ok(token) = TempToken::load_to_file() {
         if token.valid_token() {
-            Ok(TokenResponse {
+            Ok(Token {
                 access_token: token.access_token,
                 token_type: token.token_type,
                 expires_in: token.expires_in,
@@ -86,7 +86,40 @@ pub async fn get_access_token() -> Result<TokenResponse, reqwest::Error> {
                 scope: token.scope,
             })
         } else {
-            todo!("refresh token");
+            // FIXME: ここは冗長なので修正する
+            let data = fs::read_to_string("credentials.json").unwrap();
+            let credentials: Credentials = serde_json::from_str(&data).unwrap();
+            let client_id = &credentials.installed.client_id;
+            let client_secret = &credentials.installed.client_secret;
+            let google_client_id = ClientId::new(client_id.to_string());
+            let google_client_secret = ClientSecret::new(client_secret.to_string());
+            let auth_url =
+                AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).unwrap();
+            let token_url =
+                TokenUrl::new("https://oauth2.googleapis.com/token".to_string()).unwrap();
+            let client = BasicClient::new(
+                google_client_id,
+                Some(google_client_secret),
+                auth_url,
+                Some(token_url),
+            );
+            let refresh_token_str = token.refresh_token.unwrap();
+            let refresh_token = RefreshToken::new(refresh_token_str.clone());
+            let token_response = client
+                .exchange_refresh_token(&refresh_token)
+                .request_async(async_http_client)
+                .await
+                .unwrap();
+
+            let token = Token {
+                access_token: token_response.access_token().secret().clone(),
+                token_type: token.token_type,
+                expires_in: token_response.expires_in().unwrap().as_secs(),
+                refresh_token: Some(refresh_token_str),
+                scope: token.scope,
+            };
+            save_to_tmpfile(&token);
+            Ok(token)
         }
     } else {
         let data = fs::read_to_string("credentials.json").unwrap();
@@ -105,7 +138,7 @@ pub async fn get_access_token() -> Result<TokenResponse, reqwest::Error> {
     }
 }
 
-fn save_to_tmpfile(token: &TokenResponse) {
+fn save_to_tmpfile(token: &Token) {
     let date_time: DateTime<Utc> = SystemTime::now().into();
     let credentials = TempToken {
         access_token: token.access_token.clone(),
@@ -160,9 +193,10 @@ async fn get_access_token_internal(
     client_secret: &str,
     auth_code: &str,
     code_verifier: &str,
-) -> Result<TokenResponse, reqwest::Error> {
+) -> Result<Token, reqwest::Error> {
     let client = Client::new();
 
+    // FIXME: ここはOauthクラスに置き換えられる
     let mut params = HashMap::new();
     params.insert("client_id", client_id);
     params.insert("client_secret", client_secret);
@@ -171,7 +205,7 @@ async fn get_access_token_internal(
     params.insert("grant_type", "authorization_code");
     params.insert("code_verifier", code_verifier);
 
-    let response: TokenResponse = client
+    let response: Token = client
         .post(TOKEN_ENDPOINT)
         .form(&params)
         .send()
