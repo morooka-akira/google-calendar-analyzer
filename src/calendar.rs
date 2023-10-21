@@ -1,4 +1,4 @@
-use anyhow::{Error, Result};
+use anyhow::Result;
 use std::str::FromStr;
 
 use chrono::{DateTime, Datelike, FixedOffset, NaiveTime};
@@ -44,7 +44,7 @@ pub struct CalenderEventTime {
 pub async fn get_calenders(
     access_token: &str,
     config: &config::Config,
-) -> Result<Vec<CalenderEventItem>, Error> {
+) -> Result<Vec<CalenderEventItem>> {
     let time_min = &config.start_date;
     let time_max = &config.end_date;
     let events_url = format!(

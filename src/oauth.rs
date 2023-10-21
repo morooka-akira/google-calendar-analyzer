@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fs, path::Path, time::SystemTime};
 
-use anyhow::{Error, Result};
+use anyhow::Result;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use oauth2::{
     basic::BasicClient, reqwest::async_http_client, AuthUrl, ClientId, ClientSecret, CsrfToken,
@@ -42,14 +42,14 @@ pub struct TempToken {
 impl TempToken {
     const TEMP_CREDENTIAL_PATH: &str = ".temp/token.json";
 
-    fn load_to_file() -> Result<TempToken, Error> {
+    fn load_to_file() -> Result<TempToken> {
         let token_data = fs::read_to_string(Self::TEMP_CREDENTIAL_PATH)?;
         let token: TempToken = serde_json::from_str(&token_data)?;
 
         Ok(token)
     }
 
-    fn save_to_file(&self) -> Result<(), Error> {
+    fn save_to_file(&self) -> Result<()> {
         let json = serde_json::to_string_pretty(self)?;
 
         let path = Path::new(Self::TEMP_CREDENTIAL_PATH);
@@ -76,7 +76,7 @@ impl TempToken {
 const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const REDIRECT_URI: &str = "urn:ietf:wg:oauth:2.0:oob";
 
-pub async fn get_access_token() -> Result<Token, Error> {
+pub async fn get_access_token() -> Result<Token> {
     if let Ok(token) = TempToken::load_to_file() {
         if token.valid_token() {
             Ok(Token {
@@ -194,7 +194,7 @@ async fn get_access_token_internal(
     client_secret: &str,
     auth_code: &str,
     code_verifier: &str,
-) -> Result<Token, Error> {
+) -> Result<Token> {
     let client = Client::new();
 
     // FIXME: ここはOauthクラスに置き換えられる
