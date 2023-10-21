@@ -1,10 +1,12 @@
+use anyhow::Result;
+
 mod calendar;
 mod config;
 mod display;
 mod oauth;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     let config = match config::read_config().await {
         Ok(c) => c,
         Err(e) => {
@@ -23,4 +25,6 @@ async fn main() {
         .unwrap();
 
     display::display(events);
+
+    Ok(())
 }
