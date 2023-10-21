@@ -1,5 +1,6 @@
-use std::{collections::HashMap, fs, io, path::Path, time::SystemTime};
+use std::{collections::HashMap, fs, path::Path, time::SystemTime};
 
+use anyhow::{Error, Result};
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use oauth2::{
     basic::BasicClient, reqwest::async_http_client, AuthUrl, ClientId, ClientSecret, CsrfToken,
@@ -41,14 +42,14 @@ pub struct TempToken {
 impl TempToken {
     const TEMP_CREDENTIAL_PATH: &str = ".temp/token.json";
 
-    fn load_to_file() -> Result<TempToken, io::Error> {
+    fn load_to_file() -> Result<TempToken, Error> {
         let token_data = fs::read_to_string(Self::TEMP_CREDENTIAL_PATH)?;
         let token: TempToken = serde_json::from_str(&token_data)?;
 
         Ok(token)
     }
 
-    fn save_to_file(&self) -> Result<(), io::Error> {
+    fn save_to_file(&self) -> Result<(), Error> {
         let json = serde_json::to_string_pretty(self)?;
 
         let path = Path::new(Self::TEMP_CREDENTIAL_PATH);
@@ -75,7 +76,7 @@ impl TempToken {
 const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const REDIRECT_URI: &str = "urn:ietf:wg:oauth:2.0:oob";
 
-pub async fn get_access_token() -> Result<Token, reqwest::Error> {
+pub async fn get_access_token() -> Result<Token, Error> {
     if let Ok(token) = TempToken::load_to_file() {
         if token.valid_token() {
             Ok(Token {
@@ -87,7 +88,7 @@ pub async fn get_access_token() -> Result<Token, reqwest::Error> {
             })
         } else {
             // FIXME: ここは冗長なので修正する
-            let data = fs::read_to_string("credentials.json").unwrap();
+            let data = fs::read_to_string("credentials.json")?;
             let credentials: Credentials = serde_json::from_str(&data).unwrap();
             let client_id = &credentials.installed.client_id;
             let client_secret = &credentials.installed.client_secret;
@@ -122,7 +123,7 @@ pub async fn get_access_token() -> Result<Token, reqwest::Error> {
             Ok(token)
         }
     } else {
-        let data = fs::read_to_string("credentials.json").unwrap();
+        let data = fs::read_to_string("credentials.json")?;
         let credentials: Credentials = serde_json::from_str(&data).unwrap();
 
         let client_id = &credentials.installed.client_id;
@@ -193,7 +194,7 @@ async fn get_access_token_internal(
     client_secret: &str,
     auth_code: &str,
     code_verifier: &str,
-) -> Result<Token, reqwest::Error> {
+) -> Result<Token, Error> {
     let client = Client::new();
 
     // FIXME: ここはOauthクラスに置き換えられる
