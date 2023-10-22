@@ -16,13 +16,11 @@ async fn main() -> Result<()> {
     };
     println!("{:}\n", config);
 
-    let token = oauth::get_access_token().await.unwrap();
+    let token = oauth::get_access_token().await?;
 
     println!("\n");
 
-    let events = calendar::get_calenders(&token.access_token, &config)
-        .await
-        .unwrap();
+    let events = calendar::get_calenders(&token.access_token, &config).await?;
 
     display::display(events);
 

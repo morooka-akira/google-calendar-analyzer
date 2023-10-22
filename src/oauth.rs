@@ -64,11 +64,13 @@ impl TempToken {
     }
 
     fn valid_token(&self) -> bool {
-        let datetime_with_offset =
-            DateTime::<FixedOffset>::parse_from_rfc3339(&self.created_at).unwrap();
-        let datetime_utc: DateTime<Utc> = datetime_with_offset.with_timezone(&Utc);
+        let datetime_with_offset = DateTime::<FixedOffset>::parse_from_rfc3339(&self.created_at);
+        let datetime_utc: DateTime<Utc> = if let Ok(dt) = datetime_with_offset {
+            dt.with_timezone(&Utc)
+        } else {
+            return false;
+        };
         let now = Utc::now();
-
         now < datetime_utc + Duration::seconds(self.expires_in as i64)
     }
 }
@@ -89,15 +91,14 @@ pub async fn get_access_token() -> Result<Token> {
         } else {
             // FIXME: ここは冗長なので修正する
             let data = fs::read_to_string("credentials.json")?;
-            let credentials: Credentials = serde_json::from_str(&data).unwrap();
+            let credentials: Credentials = serde_json::from_str(&data)?;
             let client_id = &credentials.installed.client_id;
             let client_secret = &credentials.installed.client_secret;
             let google_client_id = ClientId::new(client_id.to_string());
             let google_client_secret = ClientSecret::new(client_secret.to_string());
             let auth_url =
-                AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).unwrap();
-            let token_url =
-                TokenUrl::new("https://oauth2.googleapis.com/token".to_string()).unwrap();
+                AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())?;
+            let token_url = TokenUrl::new("https://oauth2.googleapis.com/token".to_string())?;
             let client = BasicClient::new(
                 google_client_id,
                 Some(google_client_secret),
@@ -109,8 +110,7 @@ pub async fn get_access_token() -> Result<Token> {
             let token_response = client
                 .exchange_refresh_token(&refresh_token)
                 .request_async(async_http_client)
-                .await
-                .unwrap();
+                .await?;
 
             let token = Token {
                 access_token: token_response.access_token().secret().clone(),
@@ -128,7 +128,7 @@ pub async fn get_access_token() -> Result<Token> {
 
         let client_id = &credentials.installed.client_id;
         let client_secret = &credentials.installed.client_secret;
-        let (pkce_verifier, auth_code) = get_auth_code(client_id, client_secret);
+        let (pkce_verifier, auth_code) = get_auth_code(client_id, client_secret)?;
 
         let token =
             get_access_token_internal(client_id, client_secret, &auth_code, pkce_verifier.secret())
@@ -152,13 +152,15 @@ fn save_to_tmpfile(token: &Token) {
     let _ = credentials.save_to_file();
 }
 
-fn get_auth_code(client_id: &str, client_secret: &str) -> (oauth2::PkceCodeVerifier, String) {
+fn get_auth_code(
+    client_id: &str,
+    client_secret: &str,
+) -> Result<(oauth2::PkceCodeVerifier, String)> {
     let google_client_id = ClientId::new(client_id.to_string());
     let google_client_secret = ClientSecret::new(client_secret.to_string());
 
-    let auth_url =
-        AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).unwrap();
-    let token_url = TokenUrl::new("https://oauth2.googleapis.com/token".to_string()).unwrap();
+    let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())?;
+    let token_url = TokenUrl::new("https://oauth2.googleapis.com/token".to_string())?;
 
     let client = BasicClient::new(
         google_client_id,
@@ -166,7 +168,7 @@ fn get_auth_code(client_id: &str, client_secret: &str) -> (oauth2::PkceCodeVerif
         auth_url,
         Some(token_url),
     )
-    .set_redirect_uri(RedirectUrl::new(REDIRECT_URI.to_string()).unwrap());
+    .set_redirect_uri(RedirectUrl::new(REDIRECT_URI.to_string())?);
 
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
@@ -183,10 +185,10 @@ fn get_auth_code(client_id: &str, client_secret: &str) -> (oauth2::PkceCodeVerif
     let mut auth_code = String::new();
 
     println!("認証コードをペーストしてEnterを入力:");
-    std::io::stdin().read_line(&mut auth_code).unwrap();
+    std::io::stdin().read_line(&mut auth_code)?;
     let auth_code = auth_code.trim();
 
-    (pkce_verifier, auth_code.to_string())
+    Ok((pkce_verifier, auth_code.to_string()))
 }
 
 async fn get_access_token_internal(

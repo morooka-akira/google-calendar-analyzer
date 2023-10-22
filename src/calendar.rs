@@ -54,8 +54,8 @@ pub async fn get_calenders(
         encode(time_max)
     );
     let mut headers = HeaderMap::new();
-    let val = HeaderValue::from_str(&format!("Bearer {}", access_token));
-    headers.insert(AUTHORIZATION, val.unwrap());
+    let val = HeaderValue::from_str(&format!("Bearer {}", access_token))?;
+    headers.insert(AUTHORIZATION, val);
 
     let events: Events = Client::new()
         .get(&events_url)
