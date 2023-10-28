@@ -139,9 +139,28 @@ impl AuthClient {
             .await?;
         Ok(token_response)
     }
+
+    async fn get_token_from_refresh(
+        &self,
+        refresh_token: &str,
+    ) -> Result<StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>> {
+        let refresh_token = RefreshToken::new(refresh_token.to_string());
+        let token_response = self
+            .client
+            .exchange_refresh_token(&refresh_token)
+            .request_async(async_http_client)
+            .await?;
+        Ok(token_response)
+    }
 }
 
 pub async fn get_access_token() -> Result<Token> {
+    // TOOD: creadentials.jsonが無いときのハンドリング
+    let data = fs::read_to_string("credentials.json")?;
+    let credentials: Credentials = serde_json::from_str(&data)?;
+    let client_id = &credentials.installed.client_id;
+    let client_secret = &credentials.installed.client_secret;
+
     if let Ok(token) = TempToken::load_to_file() {
         if token.valid_token() {
             Ok(Token {
@@ -152,39 +171,13 @@ pub async fn get_access_token() -> Result<Token> {
                 scope: token.scope,
             })
         } else {
-            // FIXME: ここは冗長なので修正する
-            let data = fs::read_to_string("credentials.json")?;
-            let credentials: Credentials = serde_json::from_str(&data)?;
-            let client_id = &credentials.installed.client_id;
-            let client_secret = &credentials.installed.client_secret;
-            let google_client_id = ClientId::new(client_id.to_string());
-            let google_client_secret = ClientSecret::new(client_secret.to_string());
-            let auth_url =
-                AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())?;
-            let token_url = TokenUrl::new("https://oauth2.googleapis.com/token".to_string())?;
-            let client = BasicClient::new(
-                google_client_id,
-                Some(google_client_secret),
-                auth_url,
-                Some(token_url),
-            );
+            let client = AuthClient::new(client_id, client_secret);
             let refresh_token_str = token.refresh_token.unwrap();
-            let refresh_token = RefreshToken::new(refresh_token_str.clone());
-            let token_response = client
-                .exchange_refresh_token(&refresh_token)
-                .request_async(async_http_client)
-                .await?;
-
+            let token_response = client.get_token_from_refresh(&refresh_token_str).await?;
             let token = save_to_tmpfile(&token_response)?;
             Ok(token)
         }
     } else {
-        let data = fs::read_to_string("credentials.json")?;
-        let credentials: Credentials = serde_json::from_str(&data).unwrap();
-
-        let client_id = &credentials.installed.client_id;
-        let client_secret = &credentials.installed.client_secret;
-
         let client = AuthClient::new(client_id, client_secret);
         let token = client.get_access_token().await?;
         let token = save_to_tmpfile(&token)?;
@@ -197,7 +190,7 @@ fn save_to_tmpfile(
     token: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>,
 ) -> Result<Token> {
     let date_time: DateTime<Utc> = SystemTime::now().into();
-    let credentials = TempToken {
+    let temp_token = TempToken {
         access_token: token.access_token().secret().clone(),
         token_type: token.token_type().as_ref().to_string(),
         expires_in: token.expires_in().unwrap().as_secs(),
@@ -213,21 +206,21 @@ fn save_to_tmpfile(
         ),
         created_at: date_time.to_rfc3339(),
     };
-    let _ = credentials.save_to_file();
+
+    let _ = temp_token.save_to_file();
 
     Ok(Token {
-        access_token: token.access_token().secret().clone(),
-        token_type: token.token_type().as_ref().to_string(),
-        expires_in: token.expires_in().unwrap().as_secs(),
-        refresh_token: Some(token.refresh_token().unwrap().secret().to_string()),
+        access_token: temp_token.access_token,
+        token_type: temp_token.token_type,
+        expires_in: temp_token.expires_in,
+        refresh_token: Some(temp_token.refresh_token.unwrap()),
         scope: Some(
-            token
-                .scopes()
+            temp_token
+                .scope
                 .unwrap()
-                .first()
-                .unwrap()
-                .as_ref()
-                .to_string(),
+                .split_whitespace()
+                .collect::<Vec<&str>>()
+                .join(","),
         ),
     })
 }
