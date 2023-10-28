@@ -1,13 +1,19 @@
-use std::{collections::HashMap, fs, path::Path, time::SystemTime};
+use std::{fs, path::Path, time::SystemTime};
 
 use anyhow::Result;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use oauth2::{
-    basic::BasicClient, reqwest::async_http_client, AuthUrl, ClientId, ClientSecret, CsrfToken,
-    PkceCodeChallenge, RedirectUrl, RefreshToken, Scope, TokenResponse, TokenUrl,
+    basic::{BasicClient, BasicTokenType},
+    reqwest::async_http_client,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EmptyExtraTokenFields,
+    PkceCodeChallenge, RedirectUrl, RefreshToken, Scope, StandardTokenResponse, TokenResponse,
+    TokenUrl,
 };
-use reqwest::Client;
+
 use serde::{Deserialize, Serialize};
+
+const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
+const REDIRECT_URI: &str = "urn:ietf:wg:oauth:2.0:oob";
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Token {
@@ -75,8 +81,65 @@ impl TempToken {
     }
 }
 
-const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
-const REDIRECT_URI: &str = "urn:ietf:wg:oauth:2.0:oob";
+struct AuthClient {
+    client: oauth2::basic::BasicClient,
+}
+
+impl AuthClient {
+    fn new(client_id: &str, client_secret: &str) -> Self {
+        let google_client_id = ClientId::new(client_id.to_string());
+        let google_client_secret = ClientSecret::new(client_secret.to_string());
+
+        let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())
+            .expect("Invalid auth url");
+        let token_url = TokenUrl::new(TOKEN_ENDPOINT.to_string()).expect("Invalid token url");
+
+        let client = BasicClient::new(
+            google_client_id,
+            Some(google_client_secret),
+            auth_url,
+            Some(token_url),
+        )
+        .set_redirect_uri(
+            RedirectUrl::new(REDIRECT_URI.to_string()).expect("Invalid redirect URL"),
+        );
+        Self { client }
+    }
+
+    fn get_auth_code(&self, pkce_challenge: PkceCodeChallenge) -> Result<String> {
+        let (auth_url, _csrf_token) = self
+            .client
+            .authorize_url(CsrfToken::new_random)
+            .add_scope(Scope::new(
+                "https://www.googleapis.com/auth/calendar.readonly".to_string(),
+            )) // スコープを設定
+            .set_pkce_challenge(pkce_challenge)
+            .url();
+
+        println!("次のURLをブラウザで開いて認証してください:\n{}", auth_url);
+
+        let mut auth_code = String::new();
+
+        println!("認証コードをペーストしてEnterを入力:");
+        std::io::stdin().read_line(&mut auth_code)?;
+
+        Ok(auth_code.trim().to_string())
+    }
+
+    async fn get_access_token(
+        &self,
+    ) -> Result<StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>> {
+        let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+        let auth_code = self.get_auth_code(pkce_challenge)?;
+        let token_response = self
+            .client
+            .exchange_code(AuthorizationCode::new(auth_code.to_string()))
+            .set_pkce_verifier(pkce_verifier)
+            .request_async(async_http_client)
+            .await?;
+        Ok(token_response)
+    }
+}
 
 pub async fn get_access_token() -> Result<Token> {
     if let Ok(token) = TempToken::load_to_file() {
@@ -112,14 +175,7 @@ pub async fn get_access_token() -> Result<Token> {
                 .request_async(async_http_client)
                 .await?;
 
-            let token = Token {
-                access_token: token_response.access_token().secret().clone(),
-                token_type: token.token_type,
-                expires_in: token_response.expires_in().unwrap().as_secs(),
-                refresh_token: Some(refresh_token_str),
-                scope: token.scope,
-            };
-            save_to_tmpfile(&token);
+            let token = save_to_tmpfile(&token_response)?;
             Ok(token)
         }
     } else {
@@ -128,92 +184,50 @@ pub async fn get_access_token() -> Result<Token> {
 
         let client_id = &credentials.installed.client_id;
         let client_secret = &credentials.installed.client_secret;
-        let (pkce_verifier, auth_code) = get_auth_code(client_id, client_secret)?;
 
-        let token =
-            get_access_token_internal(client_id, client_secret, &auth_code, pkce_verifier.secret())
-                .await?;
-        save_to_tmpfile(&token);
+        let client = AuthClient::new(client_id, client_secret);
+        let token = client.get_access_token().await?;
+        let token = save_to_tmpfile(&token)?;
 
         Ok(token)
     }
 }
 
-fn save_to_tmpfile(token: &Token) {
+fn save_to_tmpfile(
+    token: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>,
+) -> Result<Token> {
     let date_time: DateTime<Utc> = SystemTime::now().into();
     let credentials = TempToken {
-        access_token: token.access_token.clone(),
-        token_type: token.token_type.clone(),
-        expires_in: token.expires_in,
-        refresh_token: token.refresh_token.clone(),
-        scope: token.scope.clone(),
+        access_token: token.access_token().secret().clone(),
+        token_type: token.token_type().as_ref().to_string(),
+        expires_in: token.expires_in().unwrap().as_secs(),
+        refresh_token: Some(token.refresh_token().unwrap().secret().to_string()),
+        scope: Some(
+            token
+                .scopes()
+                .unwrap()
+                .first()
+                .unwrap()
+                .as_ref()
+                .to_string(),
+        ),
         created_at: date_time.to_rfc3339(),
     };
     let _ = credentials.save_to_file();
-}
 
-fn get_auth_code(
-    client_id: &str,
-    client_secret: &str,
-) -> Result<(oauth2::PkceCodeVerifier, String)> {
-    let google_client_id = ClientId::new(client_id.to_string());
-    let google_client_secret = ClientSecret::new(client_secret.to_string());
-
-    let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())?;
-    let token_url = TokenUrl::new("https://oauth2.googleapis.com/token".to_string())?;
-
-    let client = BasicClient::new(
-        google_client_id,
-        Some(google_client_secret),
-        auth_url,
-        Some(token_url),
-    )
-    .set_redirect_uri(RedirectUrl::new(REDIRECT_URI.to_string())?);
-
-    let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
-
-    let (auth_url, _csrf_token) = client
-        .authorize_url(CsrfToken::new_random)
-        .add_scope(Scope::new(
-            "https://www.googleapis.com/auth/calendar.readonly".to_string(),
-        )) // スコープを設定
-        .set_pkce_challenge(pkce_challenge)
-        .url();
-
-    println!("次のURLをブラウザで開いて認証してください:\n{}", auth_url);
-
-    let mut auth_code = String::new();
-
-    println!("認証コードをペーストしてEnterを入力:");
-    std::io::stdin().read_line(&mut auth_code)?;
-    let auth_code = auth_code.trim();
-
-    Ok((pkce_verifier, auth_code.to_string()))
-}
-
-async fn get_access_token_internal(
-    client_id: &str,
-    client_secret: &str,
-    auth_code: &str,
-    code_verifier: &str,
-) -> Result<Token> {
-    let client = Client::new();
-
-    // FIXME: ここはOauthクラスに置き換えられる
-    let mut params = HashMap::new();
-    params.insert("client_id", client_id);
-    params.insert("client_secret", client_secret);
-    params.insert("code", auth_code);
-    params.insert("redirect_uri", REDIRECT_URI);
-    params.insert("grant_type", "authorization_code");
-    params.insert("code_verifier", code_verifier);
-
-    let response: Token = client
-        .post(TOKEN_ENDPOINT)
-        .form(&params)
-        .send()
-        .await?
-        .json()
-        .await?;
-    Ok(response)
+    Ok(Token {
+        access_token: token.access_token().secret().clone(),
+        token_type: token.token_type().as_ref().to_string(),
+        expires_in: token.expires_in().unwrap().as_secs(),
+        refresh_token: Some(token.refresh_token().unwrap().secret().to_string()),
+        scope: Some(
+            token
+                .scopes()
+                .unwrap()
+                .first()
+                .unwrap()
+                .as_ref()
+                .to_string(),
+        ),
+    })
 }
